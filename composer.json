@@ -1,0 +1,25 @@
+{
+    "name": "gnfsys/sheet-import",
+    "type": "library",
+    "license": "MIT-0",
+    "autoload": {
+        "psr-4": {
+            "GNfsys\\SheetImport\\": "src/"
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "require": {
+        "php": "^8.4",
+        "ext-fileinfo": "*",
+        "league/csv": "^9.28",
+        "bakame/html-table": "^0.5.0",
+        "symfony/process": "^8.0",
+        "voku/portable-ascii": "^2.1"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.95",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^13"
+    }
+}
