@@ -10,7 +10,7 @@
     "minimum-stability": "stable",
     "prefer-stable": true,
     "require": {
-        "php": "^8.4",
+        "php": "^8.4||^8.5",
         "ext-fileinfo": "*",
         "league/csv": "^9.28",
         "bakame/html-table": "^0.5.0",
