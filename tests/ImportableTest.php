@@ -29,7 +29,10 @@ class ImportableTest extends TestCase
         $importable = new class () implements OnEachRow {
             use Importable;
 
+            /** @var array<array<mixed>> */
             public array $captured = [];
+
+            /** @var array<int> */
             public array $offsets = [];
 
             public function onRow(array $row, int $offset): void
@@ -85,7 +88,10 @@ class ImportableTest extends TestCase
         $importable = new class () implements OnEachRow, WithHeadingRow {
             use Importable;
 
+            /** @var array<array<mixed>> */
             public array $captured = [];
+
+            /** @var array<int> */
             public array $offsets = [];
 
             public function __construct()
@@ -146,7 +152,10 @@ class ImportableTest extends TestCase
         $importable = new class () implements OnEachRow, WithHeadingRow {
             use Importable;
 
+            /** @var array<array<mixed>> */
             public array $captured = [];
+
+            /** @var array<int> */
             public array $offsets = [];
 
             public function __construct()

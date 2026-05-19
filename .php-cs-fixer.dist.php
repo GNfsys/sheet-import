@@ -8,7 +8,9 @@ use PhpCsFixer\Finder;
 return new Config()
     ->setRiskyAllowed(false)
     ->setRules([
-        '@PSR12' => true
+        '@PSR12' => true,
+        'phpdoc_align' => ['align' => 'vertical'],
+        'phpdoc_indent' => true
     ])
     // 💡 by default, Fixer looks for `*.php` files excluding `./vendor/` - here, you can groom this config
     ->setFinder(

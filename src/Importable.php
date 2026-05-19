@@ -175,7 +175,7 @@ trait Importable
             throw new SheetImportException("Could not create temporary directory \"{$tmpDir}\".");
         }
 
-        $csvFilename = basename($path) . '.csv';
+        $csvFilename = pathinfo($path, PATHINFO_FILENAME) . '.csv';
         $csvFilepath = $tmpDir . $csvFilename;
 
         // Fake xls handling

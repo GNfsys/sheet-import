@@ -7,7 +7,7 @@ namespace GNfsys\SheetImport;
 interface OnEachRow
 {
     /**
-     * @param  array<mixed>  $row
+     * @param array<mixed> $row
      */
     public function onRow(array $row, int $offset): void;
 }

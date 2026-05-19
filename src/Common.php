@@ -62,7 +62,8 @@ class Common
      *
      * Generate a URL friendly "slug" from a given string.
      *
-     * @param  array<string, string>  $dictionary
+     * @param array<string, string> $dictionary
+     * @phpstan-param ASCII::*_LANGUAGE_CODE $language
      */
     public static function slug(string $title, string $separator = '_', ?string $language = 'en', array $dictionary = ['@' => 'at']): string
     {
