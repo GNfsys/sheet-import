@@ -4,6 +4,8 @@
 
 This is a work in progress.
 
+See [USAGE.md](USAGE.md) for usage.
+
 ## Credits
 
 - Took some inspiration from [Laravel Excel](https://github.com/SpartnerNL/Laravel-Excel)
