@@ -697,4 +697,198 @@ class ImportableTest extends TestCase
 
         $this->assertSame([], $this->listBaseDir());
     }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportFromFileAndFromStringReadTheSameRows(): void
+    {
+        $content = "col1,col2\naa,bb\ncc,dd\n";
+
+        $newImportable = fn () => new class () implements OnEachRow, WithHeadingRow {
+            use Importable;
+
+            /** @var list<string> */
+            public array $captured = [];
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = "{$offset}/{$index} " . json_encode($row);
+            }
+        };
+
+        $fromFile = $newImportable();
+        $fromFile->importFromFile($this->createInputFile($content));
+
+        $fromString = $newImportable();
+        $fromString->importFromString($content);
+
+        $this->assertSame(['2/0 {"col1":"aa","col2":"bb"}', '3/1 {"col1":"cc","col2":"dd"}'], $fromFile->captured);
+        $this->assertSame($fromFile->captured, $fromString->captured);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportFromFileRejectsMissingFile(): void
+    {
+        $importable = new class () {
+            use Importable;
+        };
+
+        $this->expectException(SheetImportException::class);
+        $this->expectExceptionMessage('"' . $this->baseDir . '/missing.xlsx" does not exist.');
+
+        $importable->importFromFile($this->baseDir . '/missing.xlsx');
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportFromFileRejectsDirectory(): void
+    {
+        $importable = new class () {
+            use Importable;
+        };
+
+        $this->expectException(SheetImportException::class);
+        $this->expectExceptionMessage('"' . $this->baseDir . '" is not a file.');
+
+        $importable->importFromFile($this->baseDir);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportFromFileRejectsUnreadableFile(): void
+    {
+        $importable = new class () {
+            use Importable;
+        };
+
+        $path = $this->createInputFile("col1,col2\n");
+        chmod($path, 0000);
+
+        if (is_readable($path)) {
+            $this->markTestSkipped('The file is still readable, e.g. when running as root');
+        }
+
+        $this->expectException(SheetImportException::class);
+        $this->expectExceptionMessage('File "' . $path . '" is not readable.');
+
+        $importable->importFromFile($path);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportFromStringRejectsEmptyContent(): void
+    {
+        $importable = new class () {
+            use Importable;
+        };
+
+        $this->expectException(SheetImportException::class);
+        $this->expectExceptionMessage('Content must not be empty.');
+
+        $importable->importFromString('');
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportFromStringNeverReadsAFile(): void
+    {
+        $importable = new class () implements OnEachRow {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+            }
+        };
+
+        // Content that happens to be the path of an existing file
+        $path = $this->createInputFile("col1,col2\naa,bb\n");
+
+        $importable->importFromString($path);
+
+        $this->assertSame([[$path]], $importable->captured);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testSettingsAreValidatedBeforeConversion(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+
+        $importable = new class () implements OnEachRow, WithStartRow {
+            use Importable;
+
+            public function startRow(): int
+            {
+                return 0;
+            }
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                //
+            }
+        };
+
+        // Converting it would throw an HtmlConversionException instead
+        $htmlFile = $this->createInputFile('<!DOCTYPE html><html><body><p>No table here</p></body></html>');
+
+        try {
+            $importable->importFromFile($htmlFile);
+            $this->fail('Expected the start row to be rejected');
+        } catch (SheetImportException $exception) {
+            $this->assertNotInstanceOf(HtmlConversionException::class, $exception);
+            $this->assertSame('Row offset must be greater or equal to "0".', $exception->getMessage());
+        }
+
+        $this->assertSame([], $this->listBaseDir());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportLeavesManualConversionsToTheCaller(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+
+        $importable = new class ($this->createInputFile(self::HTML_TABLE)) implements OnEachRow {
+            use Importable;
+
+            public ?string $csvFromRow = null;
+
+            public function __construct(private string $htmlFile)
+            {
+                //
+            }
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->csvFromRow ??= $this->convertToCsv($this->htmlFile);
+            }
+        };
+
+        $csvBefore = $importable->convertToCsv($this->createInputFile(self::HTML_TABLE));
+
+        $importable->importFromFile($this->createInputFile(self::HTML_TABLE));
+
+        // Both manual conversions survive, before and during the import, only the import's own directory is gone
+        $this->assertFileExists($csvBefore);
+        $this->assertIsString($importable->csvFromRow);
+        $this->assertFileExists($importable->csvFromRow);
+        $this->assertCount(2, $this->listBaseDir());
+
+        $importable->cleanupTempFiles();
+
+        $this->assertSame([], $this->listBaseDir());
+    }
 }

@@ -2,8 +2,10 @@
 
 ## Temporary files
 
-Every conversion runs in its own directory (converted csv and LibreOffice profile), deleted when `import()` ends.
-If you call `convertToCsv()` directly, call `cleanupTempFiles()` once you're done with the returned file.
+Every conversion runs in its own directory (converted csv and LibreOffice profile).
+`importFromFile()` and `import()` delete the one they create when they end.
+If you call `convertToCsv()` directly, call `cleanupTempFiles()` once you're done with the returned file:
+the import methods never delete it, not even when you call `convertToCsv()` while an import is running.
 
 By default these directories are created in `sys_get_temp_dir()`. To change it for every importer, e.g. in a Laravel service provider:
 

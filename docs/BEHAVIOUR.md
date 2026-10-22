@@ -1,6 +1,6 @@
 # Behaviour
 
-How `import()` reads a file, how the interfaces an importer implements change what it receives,
+How the import methods read a file, how the interfaces an importer implements change what it receives,
 and how column names are built.
 
 ## Building an importer
@@ -33,11 +33,12 @@ class UsersImport implements OnEachRow, WithHeadingRow, WithStartRow
     }
 }
 
-new UsersImport()->import('/path/to/file.xlsx');
+new UsersImport()->importFromFile('/path/to/file.xlsx');
 ```
 
-- **`use Importable`** (the trait) gives the class `import()`, plus `convertToCsv()`, `loadCsv()` and `cleanupTempFiles()`.
-- **`implements ...`** (the interfaces) switch behaviours on. `import()` checks `$this instanceof ...` for each one,
+- **`use Importable`** (the trait) gives the class the import methods `importFromFile()`, `importFromString()` and `import()`,
+  plus `convertToCsv()`, `loadCsv()` and `cleanupTempFiles()`.
+- **`implements ...`** (the interfaces) switch behaviours on. The import methods check `$this instanceof ...` for each one,
   so implementing an interface is all it takes.
 
 | Interface           | Methods to write                                           | Effect                                                            |
@@ -50,29 +51,33 @@ new UsersImport()->import('/path/to/file.xlsx');
 
 An importer implementing neither `OnEachRow` nor `ToIterator` reads the file and does nothing with it.
 
-## What `import()` does
+## What the import methods do
 
 1. **Validates the settings.** `startRow()` and `headingRow()` must be at least `1`, otherwise a
    `SheetImportException` is thrown before anything is read.
 2. **Gets a CSV.**
-   - If the argument is the path of an existing file, its type is detected:
+   - `importFromFile($path)` reads a file. It throws a `SheetImportException` when the path doesn't exist,
+     isn't a file or isn't readable. The file type is detected:
      - plain text and CSV are read as they are
      - HTML, e.g. an `.xls` exported by a website, is read from its first table. Every row is kept as it is,
        `<thead>` and `<tfoot>` included, in the order they are written. `headingRow()` picks the heading row
        like for any other file. A cell spanning several columns repeats its value in each of them.
        A file without a table throws an `HtmlConversionException`
      - anything else (xlsx, xls, ods, ...) is converted to CSV by LibreOffice
-   - Otherwise the argument itself is read as CSV content.
-     A mistyped path is therefore imported as a single row containing the path.
+   - `importFromString($content)` reads `$content` as CSV, never as a path. Empty content throws a `SheetImportException`.
+   - `import($file)` guesses: the path of an existing file is read like `importFromFile()`, anything else like
+     `importFromString()`. A mistyped path is therefore imported as a single row containing the path, and CSV content
+     that happens to be the path of an existing file reads that file.
 3. **Guesses the delimiter.** Between `,` and `;`, the one that splits the first 16 rows into more cells wins,
    `,` on a tie.
 4. **Reads the column names**, only with `WithHeadingRow`, see [Column names](#column-names).
 5. **Selects the rows**, see [Rows and row numbers](#rows-and-row-numbers).
 6. **Hands the rows over**, to `handleIterator()` if the importer implements `ToIterator`,
    otherwise to `onRow()` if it implements `OnEachRow`.
-7. **Removes the temporary files**, also when a handler throws.
-   They are left behind if the script stops inside a handler with `exit`, `die` or `dd()`,
-   as PHP skips `finally` blocks then.
+7. **Removes its own temporary files**, also when a handler throws,
+   but not if the script stops inside a handler with `exit`, `die` or `dd()`, as PHP skips `finally` blocks then.
+   Files from your own `convertToCsv()` calls, made before or during the import, are never touched:
+   remove them with `cleanupTempFiles()`.
 
 ## Rows and row numbers
 
@@ -171,13 +176,13 @@ so `$row['a_1']` is always the column whose heading is `a_1`.
 
 ### Custom formatting
 
-The second argument of `import()` replaces both steps. It receives the heading row as it is in the file and
+The second argument of the import methods replaces both steps. It receives the heading row as it is in the file and
 must return the column names:
 
 ```php
 use GNfsys\SheetImport\Common;
 
-$importer->import($path, fn (array $header): array => Common::handleDuplicates(array_map('strtoupper', $header)));
+$importer->importFromFile($path, fn (array $header): array => Common::handleDuplicates(array_map('strtoupper', $header)));
 ```
 
 - Duplicates are not renamed for you, call `Common::handleDuplicates()` as above if they can occur.

@@ -40,4 +40,13 @@ class CommonTest extends TestCase
     {
         $this->assertSame(['citta', 'citta_1'], Common::prepareHeader(['Città', 'Citta']));
     }
+
+    public function testHeaderWithKeysThatAreNotAListBecomesAList(): void
+    {
+        $header = [2 => 'Name', 5 => 'name', 'x' => 'City'];
+
+        $this->assertSame([2 => 'name', 5 => 'name', 'x' => 'city'], Common::slugifyHeader($header));
+        $this->assertSame(['Name', 'name', 'City'], Common::handleDuplicates($header));
+        $this->assertSame(['name', 'name_1', 'city'], Common::prepareHeader($header));
+    }
 }

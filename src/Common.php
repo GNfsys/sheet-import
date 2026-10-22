@@ -9,9 +9,10 @@ use voku\helper\ASCII;
 class Common
 {
     /**
-     * Rename columns with duplicate names, appending the first free "_n" suffix
+     * Rename columns with duplicate names, appending the first free "_n" suffix.
+     * The result is a list whatever the keys of $header
      *
-     * @param list<string> $header
+     * @param array<string> $header
      *
      * @return list<string>
      */
@@ -46,9 +47,9 @@ class Common
     }
 
     /**
-     * @param list<string> $header
+     * @param array<string> $header
      *
-     * @return list<string>
+     * @return array<string>
      */
     public static function slugifyHeader(array $header): array
     {
@@ -60,7 +61,7 @@ class Common
     }
 
     /**
-     * @param list<string> $header
+     * @param array<string> $header
      *
      * @return list<string>
      */

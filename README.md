@@ -4,7 +4,7 @@
 
 This is a work in progress.
 
-See [USAGE.md](USAGE.md) for usage.
+See [USAGE.md](USAGE.md) for details.
 
 ## Credits
 

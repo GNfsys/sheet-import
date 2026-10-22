@@ -50,6 +50,62 @@ trait Importable
     }
 
     /**
+     * Import a file, converted to csv first unless it's already one
+     *
+     * @param (callable(array<string>): array<string>)|null $headerFormat
+     *
+     * @throws SheetImportException
+     * @throws RandomException
+     * @throws InvalidArgument
+     * @throws UnavailableStream
+     * @throws SyntaxError
+     * @throws Exception
+     * @throws Throwable
+     */
+    public function importFromFile(string $path, ?callable $headerFormat = null): void
+    {
+        if (!file_exists($path)) {
+            throw new SheetImportException("\"{$path}\" does not exist.");
+        }
+
+        if (!is_file($path)) {
+            throw new SheetImportException("\"{$path}\" is not a file.");
+        }
+
+        if (!is_readable($path)) {
+            throw new SheetImportException("File \"{$path}\" is not readable.");
+        }
+
+        $this->runImport($headerFormat, path: $path);
+    }
+
+    /**
+     * Import csv content
+     *
+     * @param (callable(array<string>): array<string>)|null $headerFormat
+     *
+     * @throws SheetImportException
+     * @throws RandomException
+     * @throws InvalidArgument
+     * @throws UnavailableStream
+     * @throws SyntaxError
+     * @throws Exception
+     * @throws Throwable
+     */
+    public function importFromString(string $content, ?callable $headerFormat = null): void
+    {
+        if ($content === '') {
+            throw new SheetImportException('Content must not be empty.');
+        }
+
+        $this->runImport($headerFormat, content: $content);
+    }
+
+    /**
+     * Import a file or, when $file isn't the path of an existing file, csv content
+     *
+     * @param (callable(array<string>): array<string>)|null $headerFormat
+     *
      * @throws SheetImportException
      * @throws RandomException
      * @throws InvalidArgument
@@ -59,6 +115,28 @@ trait Importable
      * @throws Throwable
      */
     public function import(string $file, ?callable $headerFormat = null): void
+    {
+        if (file_exists($file)) {
+            $this->runImport($headerFormat, path: $file);
+        } else {
+            $this->runImport($headerFormat, content: $file);
+        }
+    }
+
+    /**
+     * Only removes the temporary directory it creates, the ones from manual convertToCsv() calls are left to the caller
+     *
+     * @param (callable(array<string>): array<string>)|null $headerFormat
+     *
+     * @throws SheetImportException
+     * @throws RandomException
+     * @throws InvalidArgument
+     * @throws UnavailableStream
+     * @throws SyntaxError
+     * @throws Exception
+     * @throws Throwable
+     */
+    private function runImport(?callable $headerFormat, string $path = '', string $content = ''): void
     {
         $startRow = 0;
         if ($this instanceof WithStartRow) {
@@ -83,12 +161,14 @@ trait Importable
             // }
         }
 
+        $tmpDir = null;
+
         try {
-            if (file_exists($file)) {
-                $csv_path = self::convertToCsv($file);
-                $reader = self::loadCsv(path: $csv_path);
+            if ($path !== '') {
+                [$csvPath, $tmpDir] = $this->convertToCsvInTempDirectory($path, new LibreOfficeOptions());
+                $reader = $this->loadCsv(path: $csvPath);
             } else {
-                $reader = self::loadCsv(content: $file);
+                $reader = $this->loadCsv(content: $content);
             }
 
             if ($this instanceof WithHeadingRow) {
@@ -120,12 +200,14 @@ trait Importable
                 }
             }
         } finally {
-            $this->cleanupTempFiles();
+            if ($tmpDir !== null) {
+                self::removeDirectory($tmpDir);
+            }
         }
     }
 
     /**
-     * Delete the temporary directories created by convertToCsv(), import() calls this automatically
+     * Delete the temporary directories created by calling convertToCsv(), the import methods remove their own
      */
     public function cleanupTempFiles(): void
     {
@@ -214,6 +296,27 @@ trait Importable
         string $path,
         LibreOfficeOptions $libreOfficeOptions = new LibreOfficeOptions(),
     ): string {
+        [$csvFilepath, $tmpDir] = $this->convertToCsvInTempDirectory($path, $libreOfficeOptions);
+
+        if ($tmpDir !== null) {
+            $this->tmpDirs[] = $tmpDir;
+        }
+
+        return $csvFilepath;
+    }
+
+    /**
+     * Doesn't record the temporary directory, the caller owns it
+     *
+     * @return array{string, ?string} The csv path and the temporary directory holding it, null when the file is already a csv
+     *
+     * @throws SheetImportException
+     * @throws RandomException
+     * @throws HtmlConversionException
+     * @throws Throwable
+     */
+    private function convertToCsvInTempDirectory(string $path, LibreOfficeOptions $libreOfficeOptions): array
+    {
         if (!is_readable($path)) {
             throw new SheetImportException("Could not get the contents of the file \"{$path}\".");
         }
@@ -230,7 +333,7 @@ trait Importable
         }
 
         if ($mimeType === 'text/plain' || $mimeType === 'text/csv') {
-            return $path;
+            return [$path, null];
         }
 
         $tmpDir = $this->createTempDirectory();
@@ -255,9 +358,7 @@ trait Importable
             throw $throwable;
         }
 
-        $this->tmpDirs[] = $tmpDir;
-
-        return $csvFilepath;
+        return [$csvFilepath, $tmpDir];
     }
 
     /**
