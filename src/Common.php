@@ -9,7 +9,7 @@ use voku\helper\ASCII;
 class Common
 {
     /**
-     * Rename columns with duplicate names
+     * Rename columns with duplicate names, appending the first free "_n" suffix
      *
      * @param list<string> $header
      *
@@ -17,18 +17,32 @@ class Common
      */
     public static function handleDuplicates(array $header): array
     {
-        $found = [];
+        // Real column names are reserved upfront, a generated name must never take one
+        $taken = array_fill_keys($header, true);
+        $seen = [];
+        $lastSuffix = [];
+        $result = [];
 
-        foreach ($header as &$column) {
-            if (array_key_exists($column, $found)) {
-                $found[$column]++;
-                $column .= "_$found[$column]";
-            } else {
-                $found[$column] = 0;
+        foreach ($header as $column) {
+            if (!isset($seen[$column])) {
+                $seen[$column] = true;
+                $result[] = $column;
+
+                continue;
             }
+
+            $suffix = $lastSuffix[$column] ?? 0;
+            do {
+                $suffix++;
+                $candidate = "{$column}_{$suffix}";
+            } while (isset($taken[$candidate]));
+
+            $lastSuffix[$column] = $suffix;
+            $taken[$candidate] = true;
+            $result[] = $candidate;
         }
 
-        return $header;
+        return $result;
     }
 
     /**

@@ -1,16 +1,20 @@
 <?php
 
+use Bakame\TabularData\HtmlTable\ParserError;
 use GNfsys\SheetImport\Common;
+use GNfsys\SheetImport\Exceptions\HtmlConversionException;
 use GNfsys\SheetImport\Exceptions\SheetImportException;
 use GNfsys\SheetImport\Importable;
 use GNfsys\SheetImport\LibreOfficeOptions;
 use GNfsys\SheetImport\OnEachRow;
 use GNfsys\SheetImport\SheetImport;
 use GNfsys\SheetImport\WithHeadingRow;
+use GNfsys\SheetImport\WithStartRow;
 use GNfsys\SheetImport\WithTempDirectory;
 use League\Csv\Writer;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\CoversTrait;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\UsesClass;
 use PHPUnit\Framework\TestCase;
 
@@ -188,7 +192,7 @@ class ImportableTest extends TestCase
                 //
             }
 
-            public function onRow(array $row, int $offset): void
+            public function onRow(array $row, int $offset, int $index): void
             {
                 $this->captured[] = $row;
                 $this->tempDirsDuringImport = ($this->listBaseDir)();
@@ -212,7 +216,7 @@ class ImportableTest extends TestCase
         $importable = new class () implements OnEachRow {
             use Importable;
 
-            public function onRow(array $row, int $offset): void
+            public function onRow(array $row, int $offset, int $index): void
             {
                 throw new RuntimeException('Row handler failed');
             }
@@ -299,7 +303,7 @@ class ImportableTest extends TestCase
             /** @var array<int> */
             public array $offsets = [];
 
-            public function onRow(array $row, int $offset): void
+            public function onRow(array $row, int $offset, int $index): void
             {
                 $this->captured[] = $row;
                 $this->offsets[] = $offset;
@@ -363,7 +367,7 @@ class ImportableTest extends TestCase
                 //
             }
 
-            public function onRow(array $row, int $offset): void
+            public function onRow(array $row, int $offset, int $index): void
             {
                 $this->captured[] = $row;
                 $this->offsets[] = $offset;
@@ -422,6 +426,9 @@ class ImportableTest extends TestCase
             /** @var array<int> */
             public array $offsets = [];
 
+            /** @var array<int> */
+            public array $indexes = [];
+
             public function __construct()
             {
                 //
@@ -432,10 +439,11 @@ class ImportableTest extends TestCase
                 return 2;
             }
 
-            public function onRow(array $row, int $offset): void
+            public function onRow(array $row, int $offset, int $index): void
             {
                 $this->captured[] = $row;
                 $this->offsets[] = $offset;
+                $this->indexes[] = $index;
             }
         };
 
@@ -454,6 +462,239 @@ class ImportableTest extends TestCase
         $this->assertSame(1, $importable->offsets[0]);
         $this->assertSame(3, $importable->offsets[1]);
 
+        // The index doesn't count the header
+        $this->assertSame([0, 1], $importable->indexes);
+
         unlink($tmpPath);
+    }
+
+    /**
+     * Heading row on the third row, rows before it are imported too
+     *
+     * @return iterable<string, array{int, list<int>, list<string>}>
+     */
+    public static function startRowProvider(): iterable
+    {
+        yield 'first row' => [1, [1, 2, 4, 5], ['r1', 'r2', 'r4', 'r5']];
+        yield 'before the heading row' => [2, [2, 4, 5], ['r2', 'r4', 'r5']];
+        yield 'on the heading row' => [3, [4, 5], ['r4', 'r5']];
+        yield 'right after the heading row' => [4, [4, 5], ['r4', 'r5']];
+        yield 'after the heading row' => [5, [5], ['r5']];
+        yield 'past the last row' => [6, [], []];
+    }
+
+    /**
+     * @param list<int>    $expectedOffsets
+     * @param list<string> $expectedValues
+     *
+     * @throws Throwable
+     */
+    #[DataProvider('startRowProvider')]
+    public function testImportWithStartRow(int $startRow, array $expectedOffsets, array $expectedValues): void
+    {
+        $importable = new class ($startRow) implements OnEachRow, WithHeadingRow, WithStartRow {
+            use Importable;
+
+            /** @var list<mixed> */
+            public array $values = [];
+
+            /** @var list<int> */
+            public array $offsets = [];
+
+            /** @var list<int> */
+            public array $indexes = [];
+
+            public function __construct(private int $start)
+            {
+                //
+            }
+
+            public function headingRow(): int
+            {
+                return 3;
+            }
+
+            public function startRow(): int
+            {
+                return $this->start;
+            }
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->values[] = $row['col1'];
+                $this->offsets[] = $offset;
+                $this->indexes[] = $index;
+            }
+        };
+
+        $importable->import($this->createInputFile("r1,a\nr2,b\ncol1,col2\nr4,c\nr5,d\n"));
+
+        $this->assertSame($expectedValues, $importable->values);
+        $this->assertSame($expectedOffsets, $importable->offsets);
+        $this->assertSame(array_keys($expectedOffsets), $importable->indexes);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportKeepsRowNumbersAcrossEmptyRows(): void
+    {
+        $importable = new class () implements OnEachRow, WithHeadingRow {
+            use Importable;
+
+            /** @var list<int> */
+            public array $offsets = [];
+
+            /** @var list<int> */
+            public array $indexes = [];
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->offsets[] = $offset;
+                $this->indexes[] = $index;
+            }
+        };
+
+        $importable->import($this->createInputFile("col1,col2\naa,bb\n\ncc,dd\n"));
+
+        $this->assertSame([2, 4], $importable->offsets);
+        $this->assertSame([0, 1], $importable->indexes);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportWithDuplicateHeaderCollidingWithRealColumn(): void
+    {
+        $importable = new class () implements OnEachRow, WithHeadingRow {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+            }
+        };
+
+        $importable->import($this->createInputFile("a,a_1,a\n1,2,3\n"));
+
+        $this->assertSame([['a' => '1', 'a_1' => '2', 'a_2' => '3']], $importable->captured);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testHtmlConversionKeepsHeaderRow(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+
+        $importable = new class () {
+            use Importable;
+        };
+
+        $csvPath = $importable->convertToCsv($this->createInputFile(self::HTML_TABLE));
+
+        $this->assertSame("col1,col2\naa,bb\ncc,dd\n", file_get_contents($csvPath));
+
+        $importable->cleanupTempFiles();
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportHtmlWithHeadingRow(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+
+        $importable = new class () implements OnEachRow, WithHeadingRow {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            /** @var list<int> */
+            public array $offsets = [];
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+                $this->offsets[] = $offset;
+            }
+        };
+
+        $importable->import($this->createInputFile(self::HTML_TABLE));
+
+        $this->assertSame([['col1' => 'aa', 'col2' => 'bb'], ['col1' => 'cc', 'col2' => 'dd']], $importable->captured);
+        $this->assertSame([2, 3], $importable->offsets);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportHtmlWithTwoHeadRowsAndDuplicateNames(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+
+        $importable = new class () implements OnEachRow, WithHeadingRow {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            /** @var list<int> */
+            public array $offsets = [];
+
+            public function headingRow(): int
+            {
+                return 2;
+            }
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+                $this->offsets[] = $offset;
+            }
+        };
+
+        // A title spanning both columns, above repeated column names
+        $html = '<!DOCTYPE html><html><body><table>'
+            . '<thead><tr><th colspan="2">Report</th></tr><tr><th>Name</th><th>Name</th></tr></thead>'
+            . '<tbody><tr><td>Ann</td><td>Bea</td></tr></tbody>'
+            . '</table></body></html>';
+
+        $importable->import($this->createInputFile($html));
+
+        // The title row is above the heading row, so it's imported with the same names
+        $this->assertSame(
+            [['name' => 'Report', 'name_1' => 'Report'], ['name' => 'Ann', 'name_1' => 'Bea']],
+            $importable->captured
+        );
+        $this->assertSame([1, 3], $importable->offsets);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testHtmlWithoutTableIsAFailedConversion(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+
+        $importable = new class () {
+            use Importable;
+        };
+
+        $htmlFile = $this->createInputFile('<!DOCTYPE html><html><body><p>No table here</p></body></html>');
+
+        try {
+            $importable->convertToCsv($htmlFile);
+            $this->fail('Expected the conversion to fail');
+        } catch (HtmlConversionException $exception) {
+            $this->assertSame('Failed to convert Html file', $exception->getMessage());
+            $this->assertInstanceOf(ParserError::class, $exception->getPrevious());
+        }
+
+        $this->assertSame([], $this->listBaseDir());
     }
 }

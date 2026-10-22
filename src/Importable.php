@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace GNfsys\SheetImport;
 
 use Bakame\TabularData\HtmlTable\Parser;
-use Bakame\TabularData\HtmlTable\Section;
+use Bakame\TabularData\HtmlTable\ParserError;
 use GNfsys\SheetImport\Exceptions\HtmlConversionException;
 use GNfsys\SheetImport\Exceptions\SheetImportException;
 use League\Csv\CannotInsertRecord;
@@ -25,10 +25,6 @@ use Throwable;
 
 trait Importable
 {
-    private int $headerOffset = 0;
-
-    private int $startRow = 0;
-
     /** @var list<string> */
     private array $tmpDirs = [];
 
@@ -38,11 +34,14 @@ trait Importable
      * @throws RandomException
      * @throws CannotInsertRecord
      * @throws Exception
+     * @throws ParserError
      */
     private function convertHtmlToCsv(string $path, string $dest): void
     {
+        // Every row as it is, the heading row is chosen later like for any other file
         $table = Parser::new()
-            ->tableHeaderPosition(Section::Thead)
+            ->ignoreTableHeader()
+            ->includeAllSections()
             ->parseFile($path);
 
         $writer = Writer::from($dest, 'w+');
@@ -61,24 +60,22 @@ trait Importable
      */
     public function import(string $file, ?callable $headerFormat = null): void
     {
+        $startRow = 0;
         if ($this instanceof WithStartRow) {
-            $this->startRow = $this->startRow() - 1;
-            if ($this instanceof WithHeadingRow) {
-                $this->startRow--;
-            }
+            // Relative to the file like the heading row, which is skipped wherever it is
+            $startRow = $this->startRow() - 1;
 
-            // dd($this->start_row);
-
-            if ($this->startRow < 0) {
+            if ($startRow < 0) {
                 throw new SheetImportException('Row offset must be greater or equal to "0".');
             }
         }
 
+        $headerOffset = 0;
         if ($this instanceof WithHeadingRow && is_callable([$this, 'headingRow'])) {
-            $this->headerOffset = ((int) $this->headingRow()) - 1;
+            $headerOffset = ((int) $this->headingRow()) - 1;
 
-            if ($this->headerOffset < 0) {
-                throw new SheetImportException("Heading row offset must be greater than or equal to \"0\". It's \"$this->headerOffset\".");
+            if ($headerOffset < 0) {
+                throw new SheetImportException("Heading row offset must be greater than or equal to \"0\". It's \"$headerOffset\".");
             }
 
             // if ($this->header_offset < $this->start_row) {
@@ -95,7 +92,7 @@ trait Importable
             }
 
             if ($this instanceof WithHeadingRow) {
-                $reader->setHeaderOffset($this->headerOffset);
+                $reader->setHeaderOffset($headerOffset);
             }
 
             $header = $reader->getHeader();
@@ -107,28 +104,19 @@ trait Importable
                 throw new SheetImportException('Header is expected to be an array');
             }
 
-            // Use $header values as array keys
-            $records = new Statement()->offset($this->startRow)->process($reader, $header);
+            // Use $header values as array keys, records keep their offset in the file as key
+            // while the heading row and empty records are left out, so filter on the key
+            $records = new Statement()
+                ->where(fn (array $record, int $offset): bool => $offset >= $startRow)
+                ->process($reader, $header);
 
             if ($this instanceof ToIterator) {
                 $this->handleIterator($records);
             } elseif ($this instanceof OnEachRow) {
-                // From zero based to one based
-                $offset = $this->startRow;
-                $offset++;
-
-                // The heading row is removed when used
-                if ($this instanceof WithHeadingRow && $this->headerOffset === 0) {
-                    $offset++;
-                }
-
-                foreach ($records as $record) {
-                    $this->onRow($record, $offset);
-
-                    if ($offset === $this->headerOffset) {
-                        $offset++;
-                    }
-                    $offset++;
+                $index = 0;
+                foreach ($records as $offset => $record) {
+                    // From zero based to one based
+                    $this->onRow($record, $offset + 1, $index++);
                 }
             }
         } finally {
@@ -255,7 +243,7 @@ trait Importable
             if ($mimeType === 'text/html') {
                 try {
                     $this->convertHtmlToCsv($path, $csvFilepath);
-                } catch (Exception $exception) {
+                } catch (Exception|ParserError $exception) {
                     throw new HtmlConversionException('Failed to convert Html file', previous: $exception);
                 }
             } else {
