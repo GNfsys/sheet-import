@@ -48,6 +48,7 @@ new UsersImport()->importFromFile('/path/to/file.xlsx');
 | `WithHeadingRow`    | `headingRow(): int`, optional, defaults to `1`             | One row provides the column names, rows become `name => value`    |
 | `WithStartRow`      | `startRow(): int`                                          | Rows before this one are skipped                                  |
 | `WithTempDirectory` | `tempDirectory(): string`                                  | Where temporary files go, see [USAGE.md](../USAGE.md)                |
+| `WithLibreOfficeOptions` | `libreOfficeOptions(): LibreOfficeOptions`        | How LibreOffice converts, see [USAGE.md](../USAGE.md)             |
 
 An importer implementing neither `OnEachRow` nor `ToIterator` reads the file and does nothing with it.
 
@@ -63,7 +64,10 @@ An importer implementing neither `OnEachRow` nor `ToIterator` reads the file and
        `<thead>` and `<tfoot>` included, in the order they are written. `headingRow()` picks the heading row
        like for any other file. A cell spanning several columns repeats its value in each of them.
        A file without a table throws an `HtmlConversionException`
-     - anything else (xlsx, xls, ods, ...) is converted to CSV by LibreOffice
+     - anything else (xlsx, xls, ods, ...) is converted to CSV by LibreOffice, with the importer's
+       `libreOfficeOptions()` or else the ones set with `SheetImport::setLibreOfficeOptions()`.
+       Only the first sheet by position is read, whichever sheet was open when the file was saved,
+       unless `exportSheets` chooses another one
    - `importFromString($content)` reads `$content` as CSV, never as a path. Empty content throws a `SheetImportException`.
    - `import($file)` guesses: the path of an existing file is read like `importFromFile()`, anything else like
      `importFromString()`. A mistyped path is therefore imported as a single row containing the path, and CSV content
@@ -89,7 +93,6 @@ An importer implementing neither `OnEachRow` nor `ToIterator` reads the file and
 - **`$index`**, the position among the rows handed over, zero based. It's `0` for the first call
   even when the import starts from a later row
 
-Completely empty rows are never handed over, but they still count for `$offset`.
 A cell containing line breaks is still a single row.
 
 `ToIterator` receives the same rows. Its keys are the zero based row offsets in the file, so the row number is

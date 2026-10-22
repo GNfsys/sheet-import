@@ -9,6 +9,7 @@ use GNfsys\SheetImport\LibreOfficeOptions;
 use GNfsys\SheetImport\OnEachRow;
 use GNfsys\SheetImport\SheetImport;
 use GNfsys\SheetImport\WithHeadingRow;
+use GNfsys\SheetImport\WithLibreOfficeOptions;
 use GNfsys\SheetImport\WithStartRow;
 use GNfsys\SheetImport\WithTempDirectory;
 use League\Csv\Writer;
@@ -17,6 +18,7 @@ use PHPUnit\Framework\Attributes\CoversTrait;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\UsesClass;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Process\ExecutableFinder;
 
 #[CoversTrait(Importable::class)]
 #[CoversClass(SheetImport::class)]
@@ -49,6 +51,7 @@ class ImportableTest extends TestCase
     protected function tearDown(): void
     {
         SheetImport::setTempDirectory(null);
+        SheetImport::setLibreOfficeOptions(null);
 
         foreach ($this->inputFiles as $file) {
             unlink($file);
@@ -76,6 +79,57 @@ class ImportableTest extends TestCase
         $this->inputFiles[] = $path;
 
         return $path;
+    }
+
+    /**
+     * Stands in for LibreOffice, writes $label to "<outdir>/<input name>.csv",
+     * or to "<outdir>/<input name>-Sheet <n>.csv" when a sheet is chosen, like LibreOffice names it after the sheet
+     */
+    private function createFakeLibreOffice(string $label): string
+    {
+        $script = <<<'SH'
+            #!/bin/sh
+            while [ $# -gt 1 ]; do
+                if [ "$1" = --outdir ]; then outdir="$2"; fi
+                # The sheet token of "csv:<filter name>:44,34,..."
+                if [ "$1" = --convert-to ]; then sheet=$(echo "$2" | cut -d: -f3 | cut -d, -f12); fi
+                shift
+            done
+            name=$(basename "$1")
+            name="${name%.*}"
+            if [ "$sheet" = 0 ]; then csv="$outdir/$name.csv"; else csv="$outdir/$name-Sheet $sheet.csv"; fi
+            echo LABEL > "$csv"
+            SH;
+
+        $binary = $this->createInputFile(str_replace('LABEL', $label, $script) . "\n");
+        chmod($binary, 0700);
+
+        return $binary;
+    }
+
+    /**
+     * The real LibreOffice, from the LIBREOFFICE_BINARY environment variable (a name or a path) or "libreoffice"
+     */
+    private function findLibreOffice(): string
+    {
+        $binary = getenv('LIBREOFFICE_BINARY') ?: 'libreoffice';
+        $found = str_contains($binary, '/')
+            ? (is_executable($binary) ? $binary : null)
+            : new ExecutableFinder()->find($binary);
+
+        if ($found === null) {
+            $this->markTestSkipped("LibreOffice not found as \"{$binary}\", set LIBREOFFICE_BINARY to run it");
+        }
+
+        return $found;
+    }
+
+    /**
+     * Not plain text nor html, so it goes through LibreOffice
+     */
+    private function createSpreadsheetFile(): string
+    {
+        return $this->createInputFile("PK\x03\x04" . str_repeat("\0", 64));
     }
 
     /**
@@ -886,6 +940,207 @@ class ImportableTest extends TestCase
         $this->assertIsString($importable->csvFromRow);
         $this->assertFileExists($importable->csvFromRow);
         $this->assertCount(2, $this->listBaseDir());
+
+        $importable->cleanupTempFiles();
+
+        $this->assertSame([], $this->listBaseDir());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testDefaultLibreOfficeOptions(): void
+    {
+        SheetImport::setLibreOfficeOptions(new LibreOfficeOptions(executable: '/somewhere/soffice'));
+        SheetImport::setLibreOfficeOptions(null);
+
+        $this->assertSame('libreoffice', SheetImport::getLibreOfficeOptions()->getBinaryPath());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportUsesGlobalLibreOfficeOptions(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+        SheetImport::setLibreOfficeOptions(new LibreOfficeOptions(executable: $this->createFakeLibreOffice('global')));
+
+        $importable = new class () implements OnEachRow {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+            }
+        };
+
+        $importable->importFromFile($this->createSpreadsheetFile());
+
+        $this->assertSame([['global']], $importable->captured);
+        $this->assertSame([], $this->listBaseDir());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testWithLibreOfficeOptionsOverridesGlobalOptions(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+        SheetImport::setLibreOfficeOptions(new LibreOfficeOptions(executable: $this->createFakeLibreOffice('global')));
+
+        $importable = new class ($this->createFakeLibreOffice('importer')) implements OnEachRow, WithLibreOfficeOptions {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            public function __construct(private string $binary)
+            {
+                //
+            }
+
+            public function libreOfficeOptions(): LibreOfficeOptions
+            {
+                return new LibreOfficeOptions(executable: $this->binary);
+            }
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+            }
+        };
+
+        $importable->importFromFile($this->createSpreadsheetFile());
+
+        $this->assertSame([['importer']], $importable->captured);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testConvertToCsvUsesGlobalLibreOfficeOptionsUnlessGivenOptions(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+        SheetImport::setLibreOfficeOptions(new LibreOfficeOptions(executable: $this->createFakeLibreOffice('global')));
+
+        $importable = new class () {
+            use Importable;
+        };
+
+        $spreadsheet = $this->createSpreadsheetFile();
+
+        $this->assertSame("global\n", file_get_contents($importable->convertToCsv($spreadsheet)));
+
+        $explicit = new LibreOfficeOptions(executable: $this->createFakeLibreOffice('explicit'));
+        $this->assertSame("explicit\n", file_get_contents($importable->convertToCsv($spreadsheet, $explicit)));
+
+        $importable->cleanupTempFiles();
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testConvertToCsvFindsTheChosenSheet(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+
+        $importable = new class () {
+            use Importable;
+        };
+
+        $options = new LibreOfficeOptions(executable: $this->createFakeLibreOffice('second'), exportSheets: '2');
+        $csvPath = $importable->convertToCsv($this->createSpreadsheetFile(), $options);
+
+        $this->assertStringEndsWith('-Sheet 2.csv', $csvPath);
+        $this->assertSame("second\n", file_get_contents($csvPath));
+
+        $importable->cleanupTempFiles();
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function unsupportedSheetProvider(): iterable
+    {
+        yield 'every sheet' => ['-1'];
+        yield 'not a number' => ['Users'];
+        yield 'empty' => [''];
+        yield 'decimal' => ['1.5'];
+    }
+
+    /**
+     * @throws Throwable
+     */
+    #[DataProvider('unsupportedSheetProvider')]
+    public function testUnsupportedSheetIsRejectedBeforeConversion(string $exportSheets): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+
+        $importable = new class () {
+            use Importable;
+        };
+
+        $options = new LibreOfficeOptions(executable: $this->createFakeLibreOffice('converted'), exportSheets: $exportSheets);
+
+        try {
+            $importable->convertToCsv($this->createSpreadsheetFile(), $options);
+            $this->fail('Expected the sheet to be rejected');
+        } catch (SheetImportException $exception) {
+            $this->assertSame(
+                "Can't export sheet \"{$exportSheets}\", use 0 for the first sheet or the number of a sheet starting from 1.",
+                $exception->getMessage()
+            );
+        }
+
+        // Rejected before even creating the directory LibreOffice would run in
+        $this->assertSame([], $this->listBaseDir());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testRealLibreOfficeConvertsTheChosenSheet(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+        SheetImport::setLibreOfficeOptions(new LibreOfficeOptions(executable: $this->findLibreOffice()));
+
+        $importable = new class () {
+            use Importable;
+        };
+
+        // A flat OpenDocument spreadsheet, text that only LibreOffice can convert
+        $cell = fn (string $value): string => '<table:table-cell office:value-type="string"><text:p>' . $value . '</text:p></table:table-cell>';
+        $spreadsheet = $this->createInputFile(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            . '<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"'
+            . ' xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"'
+            . ' xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"'
+            . ' office:version="1.2" office:mimetype="application/vnd.oasis.opendocument.spreadsheet">'
+            . '<office:body><office:spreadsheet>'
+            . '<table:table table:name="First"><table:table-row>' . $cell('first') . '</table:table-row></table:table>'
+            . '<table:table table:name="Vendite 2026"><table:table-row>' . $cell('second') . '</table:table-row></table:table>'
+            . '</office:spreadsheet></office:body></office:document>'
+        );
+
+        $firstSheet = $importable->convertToCsv($spreadsheet);
+        $this->assertSame("\"first\"\n", file_get_contents($firstSheet));
+
+        $secondSheet = $importable->convertToCsv(
+            $spreadsheet,
+            new LibreOfficeOptions(executable: $this->findLibreOffice(), exportSheets: '2')
+        );
+        $this->assertStringEndsWith('-Vendite 2026.csv', $secondSheet);
+        $this->assertSame("\"second\"\n", file_get_contents($secondSheet));
+
+        try {
+            $importable->convertToCsv($spreadsheet, new LibreOfficeOptions(executable: $this->findLibreOffice(), exportSheets: '9'));
+            $this->fail('Expected a sheet that does not exist to fail');
+        } catch (SheetImportException $exception) {
+            $this->assertSame("Can't read converted csv file.", $exception->getMessage());
+        }
 
         $importable->cleanupTempFiles();
 

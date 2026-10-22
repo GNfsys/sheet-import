@@ -55,7 +55,7 @@ final class ImportUsers
     }
 
     /**
-     * Converting manually, e.g. to choose the LibreOffice binary, leaves the temporary files to the caller
+     * Converting manually, e.g. with options for this file only, leaves the temporary files to the caller
      *
      * @return list<array{row: array<mixed>, offset: int, index: int}>
      *

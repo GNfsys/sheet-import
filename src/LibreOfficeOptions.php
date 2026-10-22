@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace GNfsys\SheetImport;
 
-use GNfsys\SheetImport\Enums\SheetSelector;
-
 final class LibreOfficeOptions
 {
+    /**
+     * The default for $exportSheets, any other sheet is chosen by its number starting from 1.
+     * Every sheet at once (-1) isn't supported, an import reads a single csv
+     */
+    public const string FIRST_SHEET = '0';
+
     private const string COMMA = '44';
     private const string QUOTES = '34';
     private const string UTF8 = '76';
@@ -30,7 +34,7 @@ final class LibreOfficeOptions
         public bool   $saveAsShown = false, // true
         public bool   $exportCellFormulas = false,
         public bool   $trimSpaces = false,
-        public string $exportSheets = SheetSelector::Default->value,
+        public string $exportSheets = self::FIRST_SHEET,
         public bool   $importAsFormulas = false,
         public bool   $includeBom = false,
         public bool   $detectScientificNotation = false, // true

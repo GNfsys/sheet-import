@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace GNfsys\SheetImport\Examples;
 
 use GNfsys\SheetImport\Importable;
+use GNfsys\SheetImport\LibreOfficeOptions;
 use GNfsys\SheetImport\OnEachRow;
 use GNfsys\SheetImport\WithHeadingRow;
+use GNfsys\SheetImport\WithLibreOfficeOptions;
 use GNfsys\SheetImport\WithStartRow;
 use GNfsys\SheetImport\WithTempDirectory;
 
@@ -16,7 +18,7 @@ use GNfsys\SheetImport\WithTempDirectory;
  * PHPStan only analyses a trait through the classes using it, the anonymous ones in the tests are final
  * and implement a few interfaces each, so most of import() is unreachable code there
  */
-class UsersImport implements OnEachRow, WithHeadingRow, WithStartRow, WithTempDirectory
+class UsersImport implements OnEachRow, WithHeadingRow, WithStartRow, WithTempDirectory, WithLibreOfficeOptions
 {
     use Importable;
 
@@ -46,6 +48,14 @@ class UsersImport implements OnEachRow, WithHeadingRow, WithStartRow, WithTempDi
     public function tempDirectory(): string
     {
         return sys_get_temp_dir() . '/users-import';
+    }
+
+    /**
+     * Used instead of SheetImport::setLibreOfficeOptions(), by the import methods and by convertToCsv() without options
+     */
+    public function libreOfficeOptions(): LibreOfficeOptions
+    {
+        return new LibreOfficeOptions(executable: '/usr/bin/soffice');
     }
 
     public function onRow(array $row, int $offset, int $index): void

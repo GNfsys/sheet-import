@@ -165,7 +165,7 @@ trait Importable
 
         try {
             if ($path !== '') {
-                [$csvPath, $tmpDir] = $this->convertToCsvInTempDirectory($path, new LibreOfficeOptions());
+                [$csvPath, $tmpDir] = $this->convertToCsvInTempDirectory($path, self::defaultLibreOfficeOptions($this));
                 $reader = $this->loadCsv(path: $csvPath);
             } else {
                 $reader = $this->loadCsv(content: $content);
@@ -253,6 +253,14 @@ trait Importable
     }
 
     /**
+     * Takes the importer as a plain object for the same reason as baseTempDirectory()
+     */
+    private static function defaultLibreOfficeOptions(object $importer): LibreOfficeOptions
+    {
+        return $importer instanceof WithLibreOfficeOptions ? $importer->libreOfficeOptions() : SheetImport::getLibreOfficeOptions();
+    }
+
+    /**
      * Create a unique directory for a single conversion, also used as LibreOffice's HOME
      * so concurrent conversions don't share (and lock) the same profile
      *
@@ -285,18 +293,20 @@ trait Importable
     }
 
     /**
-     * The returned csv lives in a temporary directory, call cleanupTempFiles() when done with it
+     * The returned csv lives in a temporary directory, call cleanupTempFiles() when done with it.
+     * Without $libreOfficeOptions the importer's (WithLibreOfficeOptions) or the global ones are used
      *
      * @throws SheetImportException
      * @throws RandomException
      * @throws HtmlConversionException
      * @throws Throwable
      */
-    public function convertToCsv(
-        string $path,
-        LibreOfficeOptions $libreOfficeOptions = new LibreOfficeOptions(),
-    ): string {
-        [$csvFilepath, $tmpDir] = $this->convertToCsvInTempDirectory($path, $libreOfficeOptions);
+    public function convertToCsv(string $path, ?LibreOfficeOptions $libreOfficeOptions = null): string
+    {
+        [$csvFilepath, $tmpDir] = $this->convertToCsvInTempDirectory(
+            $path,
+            $libreOfficeOptions ?? self::defaultLibreOfficeOptions($this)
+        );
 
         if ($tmpDir !== null) {
             $this->tmpDirs[] = $tmpDir;
@@ -336,21 +346,29 @@ trait Importable
             return [$path, null];
         }
 
+        // Fake xls handling
+        $isHtml = $mimeType === 'text/html';
+
+        // Before LibreOffice runs, every sheet at once (-1) would be one csv per sheet
+        if (!$isHtml && preg_match('/^\d+$/D', $libreOfficeOptions->exportSheets) !== 1) {
+            throw new SheetImportException(
+                "Can't export sheet \"{$libreOfficeOptions->exportSheets}\", use 0 for the first sheet or the number of a sheet starting from 1."
+            );
+        }
+
         $tmpDir = $this->createTempDirectory();
 
-        $csvFilename = pathinfo($path, PATHINFO_FILENAME) . '.csv';
-        $csvFilepath = $tmpDir . $csvFilename;
-
         try {
-            // Fake xls handling
-            if ($mimeType === 'text/html') {
+            if ($isHtml) {
+                $csvFilepath = $tmpDir . pathinfo($path, PATHINFO_FILENAME) . '.csv';
+
                 try {
                     $this->convertHtmlToCsv($path, $csvFilepath);
                 } catch (Exception|ParserError $exception) {
                     throw new HtmlConversionException('Failed to convert Html file', previous: $exception);
                 }
             } else {
-                $this->convertWithLibreOffice($path, $tmpDir, $csvFilepath, $libreOfficeOptions);
+                $csvFilepath = $this->convertWithLibreOffice($path, $tmpDir, $libreOfficeOptions);
             }
         } catch (Throwable $throwable) {
             self::removeDirectory($tmpDir);
@@ -362,14 +380,12 @@ trait Importable
     }
 
     /**
+     * @return string The converted csv
+     *
      * @throws SheetImportException
      */
-    private function convertWithLibreOffice(
-        string $path,
-        string $tmpDir,
-        string $csvFilepath,
-        LibreOfficeOptions $libreOfficeOptions,
-    ): void {
+    private function convertWithLibreOffice(string $path, string $tmpDir, LibreOfficeOptions $libreOfficeOptions): string
+    {
         $conversionProcess = new Process(
             [
                 $libreOfficeOptions->getBinaryPath(),
@@ -399,9 +415,17 @@ trait Importable
             $failed = true;
         }
 
-        if ($failed || !$conversionProcess->isSuccessful() || !is_readable($csvFilepath)) {
+        // Its name depends on the chosen sheet, e.g. "<file>-<sheet name>.csv", the directory is new so it's the only csv there
+        $csvFiles = array_values(array_filter(
+            (array) scandir($tmpDir),
+            fn ($entry): bool => is_string($entry) && str_ends_with($entry, '.csv') && is_file($tmpDir . $entry)
+        ));
+
+        if ($failed || !$conversionProcess->isSuccessful() || count($csvFiles) !== 1 || !is_readable($tmpDir . $csvFiles[0])) {
             throw new SheetImportException("Can't read converted csv file.");
         }
+
+        return $tmpDir . $csvFiles[0];
     }
 
     /**

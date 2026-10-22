@@ -33,3 +33,48 @@ class UsersImport implements OnEachRow, WithTempDirectory
     // ...
 }
 ```
+
+## LibreOffice options
+
+Spreadsheets are converted by running `libreoffice` with the default `LibreOfficeOptions`.
+To change them for every importer, e.g. the path of the binary in a Laravel service provider:
+
+```php
+use GNfsys\SheetImport\LibreOfficeOptions;
+use GNfsys\SheetImport\SheetImport;
+
+public function boot(): void
+{
+    SheetImport::setLibreOfficeOptions(new LibreOfficeOptions(executable: config('app.libreoffice_path')));
+}
+```
+
+A single importer can override them by implementing `WithLibreOfficeOptions`:
+
+```php
+class UsersImport implements OnEachRow, WithLibreOfficeOptions
+{
+    use Importable;
+
+    public function libreOfficeOptions(): LibreOfficeOptions
+    {
+        return new LibreOfficeOptions(executable: '/opt/libreoffice/program/soffice');
+    }
+
+    // ...
+}
+```
+
+Both apply to the import methods and to `convertToCsv()` called without options.
+Options passed to `convertToCsv()` are used for that call only.
+
+### Choosing the sheet
+
+Only the first sheet by position is read. Another one is chosen by its number, starting from 1:
+
+```php
+new LibreOfficeOptions(exportSheets: '2');
+```
+
+`LibreOfficeOptions::FIRST_SHEET` is the default. Every sheet at once (`-1`) isn't supported, as an import reads a single csv:
+it throws a `SheetImportException` before LibreOffice runs. A sheet that doesn't exist makes the conversion fail.
