@@ -83,7 +83,8 @@ class ImportableTest extends TestCase
 
     /**
      * Stands in for LibreOffice, writes $label to "<outdir>/<input name>.csv",
-     * or to "<outdir>/<input name>-Sheet <n>.csv" when a sheet is chosen, like LibreOffice names it after the sheet
+     * or to "<outdir>/<input name>-Sheet <n>.csv" when a sheet is chosen, like LibreOffice names it after the sheet.
+     * $label is shell text in double quotes, "\n" starts a new line and variables are expanded
      */
     private function createFakeLibreOffice(string $label): string
     {
@@ -98,7 +99,7 @@ class ImportableTest extends TestCase
             name=$(basename "$1")
             name="${name%.*}"
             if [ "$sheet" = 0 ]; then csv="$outdir/$name.csv"; else csv="$outdir/$name-Sheet $sheet.csv"; fi
-            echo LABEL > "$csv"
+            printf '%b\n' "LABEL" > "$csv"
             SH;
 
         $binary = $this->createInputFile(str_replace('LABEL', $label, $script) . "\n");
@@ -1128,6 +1129,9 @@ class ImportableTest extends TestCase
         $firstSheet = $importable->convertToCsv($spreadsheet);
         $this->assertSame("\"first\"\n", file_get_contents($firstSheet));
 
+        // Its profile is created in the conversion's directory, not in the user's one
+        $this->assertDirectoryExists(dirname($firstSheet) . '/libreoffice');
+
         $secondSheet = $importable->convertToCsv(
             $spreadsheet,
             new LibreOfficeOptions(executable: $this->findLibreOffice(), exportSheets: '2')
@@ -1145,5 +1149,112 @@ class ImportableTest extends TestCase
         $importable->cleanupTempFiles();
 
         $this->assertSame([], $this->listBaseDir());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testLibreOfficeProfileStaysInTheConversionDirectory(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+
+        $importable = new class () {
+            use Importable;
+        };
+
+        // LibreOffice keeps its profile in XDG_CONFIG_HOME when it's set, otherwise in HOME
+        $options = new LibreOfficeOptions(executable: $this->createFakeLibreOffice('$HOME|$XDG_CONFIG_HOME'));
+        $csvPath = $importable->convertToCsv($this->createSpreadsheetFile(), $options);
+
+        $conversionDirectory = dirname($csvPath) . '/';
+        $this->assertSame("{$conversionDirectory}|{$conversionDirectory}\n", file_get_contents($csvPath));
+
+        $importable->cleanupTempFiles();
+    }
+
+    /**
+     * @return iterable<string, array{string, string, list<list<string>>}>
+     */
+    public static function convertedDelimiterProvider(): iterable
+    {
+        // One column, LibreOffice doesn't quote a semicolon when the separator is a comma
+        yield 'semicolons in one column' => ['44', 'Note\nship today; call first', [['Note'], ['ship today; call first']]];
+
+        // Decimal commas aren't quoted when the separator is a semicolon
+        yield 'semicolon separator' => ['59', 'Note;Amount\nfirst;1,5', [['Note', 'Amount'], ['first', '1,5']]];
+    }
+
+    /**
+     * @param list<list<string>> $expected
+     *
+     * @throws Throwable
+     */
+    #[DataProvider('convertedDelimiterProvider')]
+    public function testConvertedSpreadsheetIsReadWithTheLibreOfficeSeparator(string $fieldSeparator, string $csv, array $expected): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+        SheetImport::setLibreOfficeOptions(
+            new LibreOfficeOptions(executable: $this->createFakeLibreOffice($csv), fieldSeparator: $fieldSeparator)
+        );
+
+        $importable = new class () implements OnEachRow {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+            }
+        };
+
+        $importable->importFromFile($this->createSpreadsheetFile());
+
+        $this->assertSame($expected, $importable->captured);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testConvertedHtmlIsReadWithAComma(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+
+        $importable = new class () implements OnEachRow {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+            }
+        };
+
+        $importable->importFromFile($this->createInputFile(
+            '<!DOCTYPE html><html><body><table>'
+            . '<tr><td>Note</td></tr><tr><td>ship today; call first</td></tr>'
+            . '</table></body></html>'
+        ));
+
+        $this->assertSame([['Note'], ['ship today; call first']], $importable->captured);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testLoadCsvGuessesTheDelimiterUnlessGivenOne(): void
+    {
+        $importable = new class () {
+            use Importable;
+        };
+
+        $content = "Note\nship today; call first\n";
+
+        $this->assertSame(';', $importable->loadCsv(content: $content)->getDelimiter());
+        $this->assertSame(',', $importable->loadCsv(content: "a;b,c\n")->getDelimiter(), 'Comma on a tie');
+        $this->assertSame(',', $importable->loadCsv(content: $content, delimiter: ',')->getDelimiter());
     }
 }

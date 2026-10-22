@@ -72,8 +72,9 @@ An importer implementing neither `OnEachRow` nor `ToIterator` reads the file and
    - `import($file)` guesses: the path of an existing file is read like `importFromFile()`, anything else like
      `importFromString()`. A mistyped path is therefore imported as a single row containing the path, and CSV content
      that happens to be the path of an existing file reads that file.
-3. **Guesses the delimiter.** Between `,` and `;`, the one that splits the first 16 rows into more cells wins,
-   `,` on a tie.
+3. **Picks the delimiter.** A CSV the library converted is read with the delimiter it was written with:
+   `,` for HTML, LibreOffice's `fieldSeparator` for spreadsheets (`,` by default). Any other CSV is guessed:
+   between `,` and `;`, the one that splits the first 16 rows into more cells wins, `,` on a tie.
 4. **Reads the column names**, only with `WithHeadingRow`, see [Column names](#column-names).
 5. **Selects the rows**, see [Rows and row numbers](#rows-and-row-numbers).
 6. **Hands the rows over**, to `handleIterator()` if the importer implements `ToIterator`,

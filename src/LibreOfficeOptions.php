@@ -57,6 +57,14 @@ final class LibreOfficeOptions
         return $this->locale;
     }
 
+    /**
+     * The character the converted csv is written with, $fieldSeparator is its ASCII code
+     */
+    public function getDelimiter(): string
+    {
+        return chr((int) $this->fieldSeparator);
+    }
+
     public function getFilterOptions(): string
     {
         return $this->fieldSeparator

@@ -165,8 +165,8 @@ trait Importable
 
         try {
             if ($path !== '') {
-                [$csvPath, $tmpDir] = $this->convertToCsvInTempDirectory($path, self::defaultLibreOfficeOptions($this));
-                $reader = $this->loadCsv(path: $csvPath);
+                [$csvPath, $tmpDir, $delimiter] = $this->convertToCsvInTempDirectory($path, self::defaultLibreOfficeOptions($this));
+                $reader = $this->loadCsv(path: $csvPath, delimiter: $delimiter);
             } else {
                 $reader = $this->loadCsv(content: $content);
             }
@@ -261,8 +261,8 @@ trait Importable
     }
 
     /**
-     * Create a unique directory for a single conversion, also used as LibreOffice's HOME
-     * so concurrent conversions don't share (and lock) the same profile
+     * Create a unique directory for a single conversion, also used for LibreOffice's profile
+     * so concurrent conversions don't share (and lock) the same one
      *
      * @throws SheetImportException
      * @throws RandomException
@@ -318,7 +318,8 @@ trait Importable
     /**
      * Doesn't record the temporary directory, the caller owns it
      *
-     * @return array{string, ?string} The csv path and the temporary directory holding it, null when the file is already a csv
+     * @return array{string, ?string, ?string} The csv path, the temporary directory holding it and the delimiter it was written with,
+     *                                         both null when the file is already a csv, its delimiter is then unknown
      *
      * @throws SheetImportException
      * @throws RandomException
@@ -343,7 +344,7 @@ trait Importable
         }
 
         if ($mimeType === 'text/plain' || $mimeType === 'text/csv') {
-            return [$path, null];
+            return [$path, null, null];
         }
 
         // Fake xls handling
@@ -361,6 +362,7 @@ trait Importable
         try {
             if ($isHtml) {
                 $csvFilepath = $tmpDir . pathinfo($path, PATHINFO_FILENAME) . '.csv';
+                $delimiter = ',';
 
                 try {
                     $this->convertHtmlToCsv($path, $csvFilepath);
@@ -369,6 +371,7 @@ trait Importable
                 }
             } else {
                 $csvFilepath = $this->convertWithLibreOffice($path, $tmpDir, $libreOfficeOptions);
+                $delimiter = $libreOfficeOptions->getDelimiter();
             }
         } catch (Throwable $throwable) {
             self::removeDirectory($tmpDir);
@@ -376,7 +379,7 @@ trait Importable
             throw $throwable;
         }
 
-        return [$csvFilepath, $tmpDir];
+        return [$csvFilepath, $tmpDir, $delimiter];
     }
 
     /**
@@ -398,8 +401,10 @@ trait Importable
                 $tmpDir,
                 $path,
             ],
+            // The profile goes in XDG_CONFIG_HOME when set, otherwise in HOME, the parent process may have either
             env: [
                 'HOME' => $tmpDir,
+                'XDG_CONFIG_HOME' => $tmpDir,
                 'LANG' => $libreOfficeOptions->getLocale(),
                 'LC_ALL' => $libreOfficeOptions->getLocale(),
             ],
@@ -429,13 +434,15 @@ trait Importable
     }
 
     /**
+     * @param ?string $delimiter Guessed between "," and ";" when null
+     *
      * @return Reader<array<string>>
      *
      * @throws SheetImportException
      * @throws InvalidArgument
      * @throws UnavailableStream
      */
-    public function loadCsv(string $path = '', string $content = ''): Reader
+    public function loadCsv(string $path = '', string $content = '', ?string $delimiter = null): Reader
     {
         if ($content !== '') {
             $csv = Reader::fromString($content);
@@ -447,13 +454,13 @@ trait Importable
 
         $csv->setEscape('');
 
-        $delimiters = Info::getDelimiterStats($csv, [',', ';'], 16);
-        if ($delimiters !== []) {
-            $delimiter = array_search(max($delimiters), $delimiters, true);
-            if (!empty($delimiter)) {
-                $csv->setDelimiter((string) $delimiter);
-            }
+        if ($delimiter === null) {
+            // Whichever splits the first 16 rows into more cells, comma on a tie
+            $stats = Info::getDelimiterStats($csv, [',', ';'], 16);
+            $delimiter = $stats[';'] > $stats[','] ? ';' : ',';
         }
+
+        $csv->setDelimiter($delimiter);
 
         return $csv;
     }
