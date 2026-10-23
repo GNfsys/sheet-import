@@ -34,6 +34,30 @@ class UsersImport implements OnEachRow, WithTempDirectory
 }
 ```
 
+## Input encoding
+
+CSV files and content are read byte for byte: in any encoding but UTF-8 cells aren't valid UTF-8, and accented letters
+are dropped from column names (`Città` becomes `citt`). An importer declares the encoding by implementing `WithInputEncoding`,
+rows and column names then arrive as UTF-8:
+
+```php
+class UsersImport implements OnEachRow, WithHeadingRow, WithInputEncoding
+{
+    use Importable;
+
+    public function inputEncoding(): string
+    {
+        return 'ISO-8859-1';
+    }
+
+    // ...
+}
+```
+
+The encoding must be one of `mb_list_encodings()`, case-insensitive, otherwise the import throws a `SheetImportException`
+before reading anything. It's never guessed and has no global setting.
+It applies only to CSV read as it is: spreadsheets converted by LibreOffice and HTML files are already UTF-8 and ignore it.
+
 ## LibreOffice options
 
 Spreadsheets are converted by running `libreoffice` with the default `LibreOfficeOptions`.

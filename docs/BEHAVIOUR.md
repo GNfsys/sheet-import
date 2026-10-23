@@ -49,17 +49,18 @@ new UsersImport()->importFromFile('/path/to/file.xlsx');
 | `WithStartRow`      | `startRow(): int`                                          | Rows before this one are skipped                                  |
 | `WithTempDirectory` | `tempDirectory(): string`                                  | Where temporary files go, see [USAGE.md](../USAGE.md)                |
 | `WithLibreOfficeOptions` | `libreOfficeOptions(): LibreOfficeOptions`        | How LibreOffice converts, see [USAGE.md](../USAGE.md)             |
+| `WithInputEncoding` | `inputEncoding(): string`                                  | Encoding of CSV read as it is, see [USAGE.md](../USAGE.md)        |
 
 An importer implementing neither `OnEachRow` nor `ToIterator` reads the file and does nothing with it.
 
 ## What the import methods do
 
-1. **Validates the settings.** `startRow()` and `headingRow()` must be at least `1`, otherwise a
-   `SheetImportException` is thrown before anything is read.
+1. **Validates the settings.** `startRow()` and `headingRow()` must be at least `1`, and `inputEncoding()` must be
+   one of `mb_list_encodings()` (case-insensitive), otherwise a `SheetImportException` is thrown before anything is read.
 2. **Gets a CSV.**
    - `importFromFile($path)` reads a file. It throws a `SheetImportException` when the path doesn't exist,
      isn't a file or isn't readable. The file type is detected:
-     - plain text and CSV are read as they are
+     - plain text and CSV are read as they are, converted from `inputEncoding()` to UTF-8 with `WithInputEncoding`
      - HTML, e.g. an `.xls` exported by a website, is read from its first table. Every row is kept as it is,
        `<thead>` and `<tfoot>` included, in the order they are written. `headingRow()` picks the heading row
        like for any other file. A cell spanning several columns repeats its value in each of them.
@@ -68,13 +69,22 @@ An importer implementing neither `OnEachRow` nor `ToIterator` reads the file and
        `libreOfficeOptions()` or else the ones set with `SheetImport::setLibreOfficeOptions()`.
        Only the first sheet by position is read, whichever sheet was open when the file was saved,
        unless `exportSheets` chooses another one
-   - `importFromString($content)` reads `$content` as CSV, never as a path. Empty content throws a `SheetImportException`.
+   - `importFromString($content)` reads `$content` as CSV, never as a path, converted like a CSV file.
+     Empty content throws a `SheetImportException`.
    - `import($file)` guesses: the path of an existing file is read like `importFromFile()`, anything else like
      `importFromString()`. A mistyped path is therefore imported as a single row containing the path, and CSV content
      that happens to be the path of an existing file reads that file.
+
+   HTML and LibreOffice output is already UTF-8 and is never converted, whatever `inputEncoding()` says.
+   Without `WithInputEncoding`, or with `UTF-8`, the bytes are read as they are.
+
+   An HTML file is decoded with the charset it declares, e.g. `<meta charset="utf-8">` or
+   `<meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">`, or with its byte order mark.
+   Without either it's read as ISO-8859-1.
 3. **Picks the delimiter.** A CSV the library converted is read with the delimiter it was written with:
    `,` for HTML, LibreOffice's `fieldSeparator` for spreadsheets (`,` by default). Any other CSV is guessed:
    between `,` and `;`, the one that splits the first 16 rows into more cells wins, `,` on a tie.
+   The guess runs on the content already converted from `inputEncoding()`.
 4. **Reads the column names**, only with `WithHeadingRow`, see [Column names](#column-names).
 5. **Selects the rows**, see [Rows and row numbers](#rows-and-row-numbers).
 6. **Hands the rows over**, to `handleIterator()` if the importer implements `ToIterator`,

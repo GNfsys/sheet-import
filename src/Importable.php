@@ -9,6 +9,7 @@ use Bakame\TabularData\HtmlTable\ParserError;
 use GNfsys\SheetImport\Exceptions\HtmlConversionException;
 use GNfsys\SheetImport\Exceptions\SheetImportException;
 use League\Csv\CannotInsertRecord;
+use League\Csv\CharsetConverter;
 use League\Csv\Exception;
 use League\Csv\Info;
 use League\Csv\InvalidArgument;
@@ -161,14 +162,20 @@ trait Importable
             // }
         }
 
+        $inputEncoding = self::inputEncodingOf($this);
+        if ($inputEncoding !== null && !in_array(strtolower($inputEncoding), array_map(strtolower(...), mb_list_encodings()), true)) {
+            throw new SheetImportException("Input encoding \"{$inputEncoding}\" is not supported.");
+        }
+
         $tmpDir = null;
 
         try {
             if ($path !== '') {
                 [$csvPath, $tmpDir, $delimiter] = $this->convertToCsvInTempDirectory($path, self::defaultLibreOfficeOptions($this));
-                $reader = $this->loadCsv(path: $csvPath, delimiter: $delimiter);
+                // Converted files are already UTF-8
+                $reader = $this->loadCsv(path: $csvPath, delimiter: $delimiter, inputEncoding: $tmpDir === null ? $inputEncoding : null);
             } else {
-                $reader = $this->loadCsv(content: $content);
+                $reader = $this->loadCsv(content: $content, inputEncoding: $inputEncoding);
             }
 
             if ($this instanceof WithHeadingRow) {
@@ -250,6 +257,14 @@ trait Importable
     private static function baseTempDirectory(object $importer): string
     {
         return $importer instanceof WithTempDirectory ? $importer->tempDirectory() : SheetImport::getTempDirectory();
+    }
+
+    /**
+     * Takes the importer as a plain object for the same reason as baseTempDirectory()
+     */
+    private static function inputEncodingOf(object $importer): ?string
+    {
+        return $importer instanceof WithInputEncoding ? $importer->inputEncoding() : null;
     }
 
     /**
@@ -434,7 +449,8 @@ trait Importable
     }
 
     /**
-     * @param ?string $delimiter Guessed between "," and ";" when null
+     * @param ?string $delimiter     Guessed between "," and ";" when null
+     * @param ?string $inputEncoding Converted to UTF-8 when set, before the delimiter is guessed
      *
      * @return Reader<array<string>>
      *
@@ -442,7 +458,7 @@ trait Importable
      * @throws InvalidArgument
      * @throws UnavailableStream
      */
-    public function loadCsv(string $path = '', string $content = '', ?string $delimiter = null): Reader
+    public function loadCsv(string $path = '', string $content = '', ?string $delimiter = null, ?string $inputEncoding = null): Reader
     {
         if ($content !== '') {
             $csv = Reader::fromString($content);
@@ -450,6 +466,10 @@ trait Importable
             $csv = Reader::from($path);
         } else {
             throw new SheetImportException('One of the two arguments must be valid.');
+        }
+
+        if ($inputEncoding !== null && strcasecmp($inputEncoding, 'UTF-8') !== 0) {
+            CharsetConverter::addTo($csv, $inputEncoding, 'UTF-8');
         }
 
         $csv->setEscape('');

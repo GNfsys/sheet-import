@@ -9,6 +9,7 @@ use GNfsys\SheetImport\LibreOfficeOptions;
 use GNfsys\SheetImport\OnEachRow;
 use GNfsys\SheetImport\SheetImport;
 use GNfsys\SheetImport\WithHeadingRow;
+use GNfsys\SheetImport\WithInputEncoding;
 use GNfsys\SheetImport\WithLibreOfficeOptions;
 use GNfsys\SheetImport\WithStartRow;
 use GNfsys\SheetImport\WithTempDirectory;
@@ -1256,5 +1257,200 @@ class ImportableTest extends TestCase
         $this->assertSame(';', $importable->loadCsv(content: $content)->getDelimiter());
         $this->assertSame(',', $importable->loadCsv(content: "a;b,c\n")->getDelimiter(), 'Comma on a tie');
         $this->assertSame(',', $importable->loadCsv(content: $content, delimiter: ',')->getDelimiter());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportFromStringConvertsTheInputEncoding(): void
+    {
+        $importable = new class () implements OnEachRow, WithHeadingRow, WithInputEncoding {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            public function inputEncoding(): string
+            {
+                return 'iso-8859-1';
+            }
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+            }
+        };
+
+        $importable->importFromString("Citt\xE0,Nome\nRoma,Niccol\xF2\n");
+
+        $this->assertSame([['citta' => 'Roma', 'nome' => 'Niccolò']], $importable->captured);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testImportFromFileConvertsTheInputEncoding(): void
+    {
+        $importable = new class () implements OnEachRow, WithHeadingRow, WithInputEncoding {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            public function inputEncoding(): string
+            {
+                return 'ISO-8859-1';
+            }
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+            }
+        };
+
+        $importable->importFromFile($this->createInputFile("Citt\xE0,Nome\nRoma,Niccol\xF2\n"));
+
+        $this->assertSame([['citta' => 'Roma', 'nome' => 'Niccolò']], $importable->captured);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testDelimiterIsGuessedOnConvertedContent(): void
+    {
+        $importable = new class () implements OnEachRow, WithHeadingRow, WithInputEncoding {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            public function inputEncoding(): string
+            {
+                return 'ISO-8859-1';
+            }
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+            }
+        };
+
+        $importable->importFromString("Citt\xE0;Note\nRoma;s\xEC, domani\n");
+
+        $this->assertSame([['citta' => 'Roma', 'note' => 'sì, domani']], $importable->captured);
+        $this->assertSame(';', $importable->loadCsv(content: "Note\ns\xEC; domani\n", inputEncoding: 'ISO-8859-1')->getDelimiter());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testUnsupportedInputEncodingIsRejectedBeforeConversion(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+
+        $importable = new class () implements OnEachRow, WithInputEncoding {
+            use Importable;
+
+            public function inputEncoding(): string
+            {
+                return 'NOT-AN-ENCODING';
+            }
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                //
+            }
+        };
+
+        // Converting it would throw an HtmlConversionException instead
+        $htmlFile = $this->createInputFile('<!DOCTYPE html><html><body><p>No table here</p></body></html>');
+
+        try {
+            $importable->importFromFile($htmlFile);
+            $this->fail('Expected the input encoding to be rejected');
+        } catch (SheetImportException $exception) {
+            $this->assertNotInstanceOf(HtmlConversionException::class, $exception);
+            $this->assertSame('Input encoding "NOT-AN-ENCODING" is not supported.', $exception->getMessage());
+        }
+
+        $this->assertSame([], $this->listBaseDir());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testInputIsNotConvertedByDefault(): void
+    {
+        $content = "Citt\xE0,Nome\nRoma,Niccol\xF2\n";
+
+        $importable = new class () implements OnEachRow, WithHeadingRow {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+            }
+        };
+
+        $utf8Importable = new class () implements OnEachRow, WithHeadingRow, WithInputEncoding {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            public function inputEncoding(): string
+            {
+                return 'utf-8';
+            }
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+            }
+        };
+
+        $importable->importFromString($content);
+        $utf8Importable->importFromString($content);
+
+        $this->assertSame([['citt' => 'Roma', 'nome' => "Niccol\xF2"]], $importable->captured);
+        $this->assertSame($importable->captured, $utf8Importable->captured);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testConvertedFilesIgnoreTheInputEncoding(): void
+    {
+        SheetImport::setTempDirectory($this->baseDir);
+        SheetImport::setLibreOfficeOptions(new LibreOfficeOptions(executable: $this->createFakeLibreOffice('Città\nNiccolò')));
+
+        $importable = new class () implements OnEachRow, WithHeadingRow, WithInputEncoding {
+            use Importable;
+
+            /** @var array<array<mixed>> */
+            public array $captured = [];
+
+            public function inputEncoding(): string
+            {
+                return 'ISO-8859-1';
+            }
+
+            public function onRow(array $row, int $offset, int $index): void
+            {
+                $this->captured[] = $row;
+            }
+        };
+
+        $importable->importFromFile($this->createInputFile(
+            '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><table>'
+            . '<tr><td>Città</td></tr><tr><td>Niccolò</td></tr>'
+            . '</table></body></html>'
+        ));
+        $importable->importFromFile($this->createSpreadsheetFile());
+
+        $this->assertSame([['citta' => 'Niccolò'], ['citta' => 'Niccolò']], $importable->captured);
     }
 }
